@@ -1,0 +1,15 @@
+
+
+1. Compile PLC
+   export CC=/home/xinmin/work_kernel/gcc-linaro-arm-linux-gnueabihf-4.9-2014.09_linux/bin/arm-linux-gnueabihf-
+   make -C /home/xinmin/work_svn/trunk/bb-kernel/KERNEL ARCH=arm CROSS_COMPILE=${CC} M=/home/xinmin/work_mercurial/PLC  modules  
+
+make -C /home/xinmin/work_svn/trunk/bb-kernel/KERNEL ARCH=arm CROSS_COMPILE=${CC} M=/home/xinmin/work_kernel/plc2  modules 
+
+
+
+
+
+CONFIG_DEBUG_SECTION_MISMATCH=y
+
+make CONFIG_DEBUG_SECTION_MISMATCH=y -C /home/xinmin/work_svn/trunk/bb-kernel/KERNEL ARCH=arm CROSS_COMPILE=${CC} M=/home/xinmin/work_kernel/plc2  modules
