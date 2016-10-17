@@ -2,7 +2,6 @@
  * PLM-1 power line controller kernel driver By DAVID WANG
  *
  * Copyright (C) 2015,2016  Morgan Solar Inc
- * Author:	David Wang <david.wang@morgansolar.com>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -45,7 +44,7 @@
 #include <linux/plc.h>         /* local definitions */
 
 MODULE_LICENSE("GPL");
-MODULE_AUTHOR("DAVIDWANG");
+MODULE_AUTHOR("MorganSolar");
 MODULE_DESCRIPTION("PLM-1 PLC kernel driver");
 MODULE_VERSION("1.0");
 
@@ -131,18 +130,26 @@ MODULE_VERSION("1.0");
 
 // this is used to calculate device pin value from the GPIO pin value
 #define GPIO_TO_PIN(bank, gpio)    (32 * (bank) + (gpio))
+#define GPIO_LEVEL_HI              (1)
+#define GPIO_LEVEL_LOW             (0)
 
-// GPIO pin 3_17 of debug LED
+// GPIO2_0 for debug LED
 #define DEBUG_LED        GPIO_TO_PIN(2, 0)
-//GPIO pin2_22 PLC_RST
+//GPIO2_22 PLC_RST
 #define PLC_RST          GPIO_TO_PIN(2, 22)
-//GPIO pin0_6 PLC_INT
+//GPIO0_6 PLC_INT
 #define PLC_INT          GPIO_TO_PIN(2, 23)
-//GPIO pin2_24 PLC CONFIG
+//GPIO2_24 PLC CONFIG
 #define PLC_CNF          GPIO_TO_PIN(2, 24)
+//GPIO1_25 for signal to user space(trigger ADC sampling to get PLC gain value)
+#define GPIO_USER_SPACE_TRIGGER   GPIO_TO_PIN(1,25)
 
 //GPIO1_8, output, set to low to disable RX to PLM
 #define GPIO_RX_SWITCH        GPIO_TO_PIN(1, 8)
+
+#define GPIO_USER_SPACE_TRIGGER_HI    gpio_set_value(GPIO_USER_SPACE_TRIGGER, 255)
+#define GPIO_USER_SPACE_TRIGGER_LOW   gpio_set_value(GPIO_USER_SPACE_TRIGGER, 0)
+
 
 // macros for disable/enable RX to PLM
 #define GPIO_DISABLE_RX  gpio_set_value(GPIO_RX_SWITCH, 255)
@@ -697,6 +704,8 @@ static void tx_workq_handler(struct work_struct *work)
         return;
     }
 
+    GPIO_USER_SPACE_TRIGGER_HI;
+
     /* To this point, make sure irq enabled before this function return!!!  ============*/
     disable_irq(gpio_to_irq(PLC_INT));
     mutex_lock(&plc_dev->buf_lock);
@@ -722,12 +731,12 @@ static void tx_workq_handler(struct work_struct *work)
 
 	printk(KERN_ERR "spi_syncput failed\n");
 
-        mutex_unlock(&plc_dev->buf_lock);
-        enable_irq(gpio_to_irq(PLC_INT));
+        wake_up_interruptible(&plc_dev->plc_wait_queue);            
+        goto tx_return;
+        //mutex_unlock(&plc_dev->buf_lock);
+        //enable_irq(gpio_to_irq(PLC_INT));   
+        //return;  
 
-	wake_up_interruptible(&plc_dev->plc_wait_queue);   
-          
-        return;  
         break;
     case PLM_TR_STATUS_OK:  //0x18 : last byte transmit success
     #ifdef PLC_TX_DEBUG
@@ -741,15 +750,15 @@ static void tx_workq_handler(struct work_struct *work)
             plc_dev->plc_status = RX;
             //plc_dev->TX_Complete = TRUE;
 
-            wake_up_interruptible(&plc_dev->plc_wait_queue);
+           
 
             dbgPlcInt((KERN_ERR "TX_EOP_SENT status: 0x%x \n", rcv_last_tr_status));
 
-
-            mutex_unlock(&plc_dev->buf_lock);
-            enable_irq(gpio_to_irq(PLC_INT));
-
-            return;
+            wake_up_interruptible(&plc_dev->plc_wait_queue);            
+            goto tx_return;
+            //mutex_unlock(&plc_dev->buf_lock);
+            //enable_irq(gpio_to_irq(PLC_INT));
+            //return;
         }
 
         /* last byte transmit success(PLM_TR_STATUS_OK), so transmit the next one:*/
@@ -768,12 +777,11 @@ static void tx_workq_handler(struct work_struct *work)
 
 	    printk(KERN_ERR "spi_syncput failed\n");
 
-            mutex_unlock(&plc_dev->buf_lock);
-            enable_irq(gpio_to_irq(PLC_INT));
-
-	    wake_up_interruptible(&plc_dev->plc_wait_queue);   
-          
-            return;  
+            wake_up_interruptible(&plc_dev->plc_wait_queue);            
+            goto tx_return;
+            //mutex_unlock(&plc_dev->buf_lock);
+            //enable_irq(gpio_to_irq(PLC_INT));
+            //return;  
             break;
 
         case PLM_LAST_TR_STATUS_NO_OP: //0x1f
@@ -805,29 +813,32 @@ static void tx_workq_handler(struct work_struct *work)
             plc_dev->txindex = 0;
             plc_dev->plc_status = RX;
 
-            wake_up_interruptible(&plc_dev->plc_wait_queue);
+           
 
             dbgPlcInt((KERN_ERR "TX failed - status:[0x%x] \n", rcv_last_tr_status));
 
-            mutex_unlock(&plc_dev->buf_lock);
-            enable_irq(gpio_to_irq(PLC_INT));
+            wake_up_interruptible(&plc_dev->plc_wait_queue);            
+            goto tx_return;
+            
+            //mutex_unlock(&plc_dev->buf_lock);
+            //enable_irq(gpio_to_irq(PLC_INT));
 
-            return;
+            //return;
         }
         /* else: try another time */
         break;
     }
     dbgPlcInt((KERN_ERR "enable_irq... \n"));
+
+tx_return:
     mutex_unlock(&plc_dev->buf_lock);
     enable_irq(gpio_to_irq(PLC_INT));
-   /* ====================================================================================== */
-   
-   
-   return;
+    GPIO_USER_SPACE_TRIGGER_LOW;
+    return;
 
 
 
-
+#if 0
    if(plc_dev->plc_status == TX)
    {
 
@@ -903,6 +914,7 @@ static void tx_workq_handler(struct work_struct *work)
          }
       }
    }
+#endif
 
 }
 
@@ -2044,6 +2056,7 @@ static int __init  plc_init(void)
 
     plcdev_class = class_create(THIS_MODULE, "plcdev");
 
+    //----------------------------------------Setting DEBUG_LED GPIO------------------
     if (!gpio_is_valid(DEBUG_LED))
     {
         printk(KERN_ALERT "PLC Debug LED not available\n");
@@ -2072,7 +2085,7 @@ static int __init  plc_init(void)
     dbgPlcInit((KERN_ERR "GCU3_LED0 set direction output, \n"));
     DEBUG_LED_ON;
 
-
+    //-----------------------------------------Setting PLC_RST GPIO--------------------
     if (!gpio_is_valid(PLC_RST))
     {
       printk(KERN_ALERT "PLC_RST pin not available\n");
@@ -2099,7 +2112,7 @@ static int __init  plc_init(void)
     PLC_RST_HI;
     dbgPlcInit((KERN_ERR "PLC RST set to output HI, \n"));
 
-#if 1
+    //--------------------------------Setting PLC_INT GPIO----------------------------
     if (!gpio_is_valid(PLC_INT))
     {
         printk(KERN_ALERT "PLC_INT pin not available\n");
@@ -2124,8 +2137,8 @@ static int __init  plc_init(void)
         goto fail;  /* Make this more graceful */
     }
     dbgPlcInit((KERN_ERR "PLC_INT set direction input, \n"));
-#endif
 
+    //--------------------------------------Setting PLC_CNF GPIO------------------------
     if (!gpio_is_valid(PLC_CNF))
     {
         printk(KERN_ALERT "PLC_CNF pin not available\n");
@@ -2151,11 +2164,7 @@ static int __init  plc_init(void)
     }
     dbgPlcInit((KERN_ERR "PLC_CNF set input OK, \n"));
 
-
-
-
-
-
+    //----------------------------------------Setting GPIO_RX_SWITCH GPIO------------------
     if (!gpio_is_valid(GPIO_RX_SWITCH))
     {
         printk(KERN_ALERT "GPIO_RX_SWITCH not available\n");
@@ -2177,7 +2186,7 @@ static int __init  plc_init(void)
     /*set gpio direction and initial value:0(low)*/
     if( (result=gpio_direction_output(GPIO_RX_SWITCH, 0)) < 0 )
     {
-      printk(KERN_ALERT "can not set caicai-gpio output\n");
+      printk(KERN_ALERT "can not set gpio output\n");
       result = -EINVAL;
       goto fail;  /* Make this more graceful */
     }
@@ -2185,9 +2194,36 @@ static int __init  plc_init(void)
 
 
 
+    //----------------------------------------Setting GPIO_USER_SPACE_TRIGGER ---------------
+    if (!gpio_is_valid(GPIO_USER_SPACE_TRIGGER))
+    {
+        printk(KERN_ALERT "GPIO_USER_SPACE_TRIGGER not available\n");
+        result = -EINVAL;
+        goto fail;  /* Make this more graceful */
+    }
+    dbgPlcInit((KERN_ERR "GPIO_USER_SPACE_TRIGGER available, \n"));
+
+    /*we have requested valid gpios*/
+    if((result=gpio_request(GPIO_USER_SPACE_TRIGGER, "caicai-gpio")))
+    {
+       printk(KERN_ALERT "Unable to request GPIO[%d]\n", GPIO_USER_SPACE_TRIGGER);
+       result = -EINVAL;
+       goto fail;  
+    }
+    dbgPlcInit((KERN_ERR "GPIO_USER_SPACE_TRIGGER request OK, \n"));
+    set_bit(5, &gpio_pin_flags);
+
+    /*set gpio direction and initial value:0(low)*/
+    if( (result=gpio_direction_output(GPIO_USER_SPACE_TRIGGER, GPIO_LEVEL_LOW)) < 0 )
+    {
+      printk(KERN_ALERT "can not set gpio output\n");
+      result = -EINVAL;
+      goto fail;  /* Make this more graceful */
+    }
+    dbgPlcInit((KERN_ERR "GPIO_USER_SPACE_TRIGGER set direction output, \n"));
 
 
-
+    //--------------------------------------------------------------------------------------
     result=spi_register_driver(&plc_spi_driver);//trigger probe
 
     if(result<0)
@@ -2224,6 +2260,9 @@ static void  __exit plc_exit(void)
 
 	 if(test_bit(4, &gpio_pin_flags))
 	 		 gpio_free(GPIO_RX_SWITCH);
+
+    if(test_bit(5, &gpio_pin_flags))
+	 		 gpio_free(GPIO_USER_SPACE_TRIGGER);
 
     spi_unregister_driver(&plc_spi_driver);
 
