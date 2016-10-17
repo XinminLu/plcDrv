@@ -1,0 +1,12 @@
+.plc.ko.cmd
+.plc.mod.o.cmd
+.plc.o.cmd
+.tmp_versions/
+ComipleInstructions~
+Module.symvers
+modules.order
+plc.ko
+plc.mod.c
+plc.mod.o
+plc.o
+plc.c~
